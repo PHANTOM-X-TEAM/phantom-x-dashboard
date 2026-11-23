@@ -1,66 +1,17 @@
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2';
-const cors = { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type', 'Access-Control-Allow-Methods': 'POST, OPTIONS' };
-const json = (body: unknown, status = 200) => Response.json(body, { status, headers: cors });
-async function sha256(value: string) {
-  const bytes = new TextEncoder().encode(value);
-  const digest = await crypto.subtle.digest('SHA-256', bytes);
-  return [...new Uint8Array(digest)].map(x => x.toString(16).padStart(2, '0')).join('');
-}
-function extractShortUrl(status: number, location: string | null, body: string) {
-  let candidate = location || body.trim();
-  if (candidate.startsWith('{')) {
-    try {
-      const parsed = JSON.parse(candidate);
-      candidate = parsed.shortenedUrl || parsed.short_url || parsed.url || parsed.link || '';
-    } catch { /* keep plain text candidate */ }
-  }
-  const match = candidate.match(/https?:\/\/[^\s"'<>]+/i);
-  if (match) candidate = match[0].replace(/[),.]+$/, '');
-  let parsed: URL;
-  try { parsed = new URL(candidate); } catch { throw new Error(`GPLinks did not return a valid short URL (HTTP ${status}). Check your API token and account.`); }
-  if (parsed.protocol !== 'https:' || !(parsed.hostname === 'gplinks.co' || parsed.hostname.endsWith('.gplinks.co') || parsed.hostname === 'gplinks.com' || parsed.hostname.endsWith('.gplinks.com'))) {
-    throw new Error('GPLinks returned an unexpected URL. Link was not opened.');
-  }
-  return parsed.toString();
-}
-Deno.serve(async (req) => {
-  if (req.method === 'OPTIONS') return new Response('ok', { headers: cors });
-  try {
-    if (req.method !== 'POST') return json({ error: 'Method not allowed' }, 405);
-    const auth = req.headers.get('Authorization') || '';
-    const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-    const anonKey = Deno.env.get('SUPABASE_ANON_KEY')!;
-    const userClient = createClient(supabaseUrl, anonKey, { global: { headers: { Authorization: auth } } });
-    const { data: { user }, error: userError } = await userClient.auth.getUser();
-    if (userError || !user) return json({ error: 'Sign in required' }, 401);
-    const admin = createClient(supabaseUrl, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!);
-    const { data: active, error: activeError } = await admin.from('license_keys').select('key_value,created_at,expires_at,device_id').eq('user_id', user.id).gt('expires_at', new Date().toISOString()).order('created_at', { ascending: false }).limit(1).maybeSingle();
-    if (activeError) throw activeError;
-    if (active) return json({ key: active, existing: true });
-
-    const apiToken = Deno.env.get('GPLINKS_API_TOKEN');
-    if (!apiToken) return json({ error: 'GPLinks API token is not configured in Supabase Edge Function Secrets.' }, 503);
-    const siteUrl = (Deno.env.get('PHANTOMX_SITE_URL') || 'https://phantom-x-team.github.io/phantom-x-dashboard/').replace(/\/$/, '');
-    const sessionToken = crypto.randomUUID();
-    const expiresAt = new Date(Date.now() + 20 * 60 * 1000).toISOString();
-    const destination = new URL(siteUrl + '/');
-    destination.searchParams.set('gp_return', sessionToken);
-    const tokenHash = await sha256(sessionToken);
-
-    const apiUrl = new URL('https://api.gplinks.com/st');
-    apiUrl.searchParams.set('api', apiToken);
-    apiUrl.searchParams.set('url', destination.toString());
-    apiUrl.searchParams.set('format', 'text');
-    const gpResponse = await fetch(apiUrl.toString(), { method: 'GET', redirect: 'manual', headers: { 'Accept': 'text/plain' } });
-    const body = gpResponse.status >= 300 && gpResponse.status < 400 ? '' : await gpResponse.text();
-    if (!gpResponse.ok && !(gpResponse.status >= 300 && gpResponse.status < 400)) {
-      throw new Error(`GPLinks API request failed (HTTP ${gpResponse.status}). Check the API token and GPLinks account.`);
-    }
-    const shortUrl = extractShortUrl(gpResponse.status, gpResponse.headers.get('location'), body);
-    const { error: insertError } = await admin.from('key_link_sessions').insert({ user_id: user.id, token_hash: tokenHash, destination_url: destination.toString(), short_url: shortUrl, status: 'pending', expires_at: expiresAt });
-    if (insertError) throw insertError;
-    return json({ redirect_url: shortUrl, pending_expires_at: expiresAt, provider: 'gplinks' });
-  } catch (e) {
-    return json({ error: e instanceof Error ? e.message : 'Server error' }, 500);
-  }
-});
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="theme-color" content="#09090c"><meta name="description" content="PHANTOM X Official Dashboard"><title>PHANTOM X — Official Dashboard</title><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700;800;900&family=DM+Sans:wght@400;500;600;700&display=swap" rel="stylesheet"><link rel="stylesheet" href="style.css"></head>
+<body><div class="ambient a1"></div><div class="ambient a2"></div><div class="scrim" id="scrim"></div>
+<aside class="sidebar" id="sidebar"><div class="brand"><img src="assets/phantom-emblem.jpg" alt="PHANTOM X"><div><b>PHANTOM <i>X</i></b><small>OFFICIAL DASHBOARD</small></div><button class="close-menu" id="closeMenu">×</button></div><div class="workspace"><span class="pulse"></span> PERSONAL WORKSPACE <b>FREE</b></div><div class="nav-label">WORKSPACE</div><nav><button class="nav active" data-page="overview"><span>▦</span> Overview</button><button class="nav" data-page="dashboard"><span>▣</span> Dashboard</button><button class="nav" data-page="getkey"><span>⌑</span> Get Key</button><button class="nav" data-page="support"><span>◉</span> Support</button></nav><div class="side-bottom"><div class="sysbox"><small><span class="pulse"></span> SYSTEM STATUS</small><b>Interface ready</b><p>UI preview environment</p><div class="meter"><i></i></div></div><button class="guest" data-modal="login"><span>G</span><div><b>Guest User</b><small>Not signed in</small></div><strong>›</strong></button><small class="version">PHANTOM X · v1.0 UI PREVIEW</small></div></aside>
+<main><header class="topbar"><div class="crumb"><button id="openMenu">☰</button><span>PHANTOM X TEAM</span><b>›</b><strong id="crumbTitle">Overview</strong></div><div class="top-actions"><span class="online"><i class="pulse"></i> SYSTEM ONLINE</span><button class="bell" data-modal="notice">♧<i></i></button><button class="signin" data-modal="login">↗ &nbsp; Sign in</button></div></header>
+<div class="wrap">
+<section class="page active" id="overview"><div class="hero"><img src="assets/hero-backdrop.jpg" alt="" class="backdrop"><div class="hero-shade"></div><div class="hero-copy"><div class="eyebrow">✦ &nbsp; NEXT-GEN CONTROL PANEL</div><h1>ENTER THE<br><em>PHANTOM</em> NETWORK<span>.</span></h1><p>Your central hub for account access, license management and platform updates. Built for speed. Designed for control.</p><div class="hero-buttons"><button class="primary" data-go="getkey">⌑ &nbsp; GET YOUR KEY <b>→</b></button><button class="secondary" data-go="dashboard">EXPLORE DASHBOARD ↗</button></div><div class="hero-meta">⬡ SECURE ACCESS <i></i> ϟ FAST & LIGHTWEIGHT</div></div><div class="hero-logo"><img src="assets/phantom-emblem.jpg" alt="PHANTOM X emblem"><small>PX / 001</small></div><div class="hero-mark">PHANTOM X<br>OFFICIAL SYSTEM</div></div>
+<div class="section-line"><div><div class="eyebrow">● &nbsp; LIVE OVERVIEW</div><h2>Your command center</h2><p>Everything you need, in one place.</p></div><span class="preview"><i class="pulse"></i> PREVIEW ENVIRONMENT</span></div>
+<div class="stats"><article class="stat"><div><span class="stat-icon red">♙</span><small>ACCOUNT</small><b>↗</b></div><strong>Guest</strong><p>Sign in to view profile</p></article><article class="stat"><div><span class="stat-icon">⌑</span><small>ACTIVE LICENSE</small><b>↗</b></div><strong>— — —</strong><p>No license connected</p></article><article class="stat"><div><span class="stat-icon green">⌁</span><small>SYSTEM STATUS</small><b>↗</b></div><strong>Operational</strong><p>Interface is ready</p></article><article class="stat"><div><span class="stat-icon">◷</span><small>LAST ACTIVITY</small><b>↗</b></div><strong>Just now</strong><p>Current session</p></article></div>
+<div class="features"><article class="panel feature"><div class="panel-top"><span class="tile red">⌑</span><small>ACCESS PORTAL / 01</small><b>↗</b></div><h3>Get your access key</h3><p>Start the key request flow and unlock your PHANTOM X access. Key generation will be connected in the next development phase.</p><button class="text-btn" data-go="getkey">OPEN KEY PORTAL <b>→</b></button><span class="watermark">⌑</span></article><article class="panel feature"><div class="panel-top"><span class="tile">♙</span><small>ACCOUNT / 02</small></div><h3>Personal dashboard</h3><p>Manage your profile, review license details and check your account activity in one secure place.</p><button class="text-btn" data-go="dashboard">VIEW DASHBOARD <b>→</b></button><span class="watermark">♙</span></article></div>
+<div class="bottom-grid"><article class="panel system"><div class="panel-head"><div><div class="eyebrow">● &nbsp; PLATFORM HEALTH</div><h3>System status</h3></div><span class="good">● ALL GOOD</span></div><div class="sysrow"><span>◉ &nbsp; Dashboard interface</span><b class="green-text">Operational</b></div><div class="sysrow"><span>▤ &nbsp; Database connection</span><b class="wait">Supabase project configured</b></div><div class="sysrow"><span>⬡ &nbsp; Verification service</span><b class="wait">GPLinks setup pending</b></div><div class="note">♧ &nbsp; Backend services will be enabled in a later phase.</div></article><article class="panel community"><span class="tile">◎</span><div class="eyebrow">STAY CONNECTED</div><h3>Join the community</h3><p>Get announcements, updates and support from the PHANTOM X team.</p><a class="text-btn" href="https://t.me/Ph4ntomXOfficial" target="_blank" rel="noreferrer">TELEGRAM COMMUNITY ↗</a></article></div></section>
+<section class="page" id="dashboard"><div class="page-heading"><div class="eyebrow">● &nbsp; USER WORKSPACE</div><h2>Dashboard</h2><p>Your account overview and license information.</p></div><div class="welcome panel"><span class="big-avatar">G</span><div><small>WELCOME BACK</small><h3>Guest User</h3><p>Sign in to connect your PHANTOM X account.</p></div><button class="primary compact" data-modal="login">↗ &nbsp; SIGN IN</button></div><div class="two-col"><article class="panel padded"><div class="panel-head"><h3>Profile information</h3><span class="tag">GUEST MODE</span></div><div class="profile"><span class="big-avatar">G</span><div><b>Guest User</b><small>Not authenticated</small></div></div><div class="info"><span>Account ID</span><b>Not available</b></div><div class="info"><span>Email address</span><b>Not connected</b></div><div class="info"><span>Member since</span><b>—</b></div></article><article class="panel padded"><div class="panel-head"><h3>License overview</h3><span class="tag amber">NOT CONNECTED</span></div><div class="empty-license"><span>⌑</span><b>License status</b><p>Your active key and expiry will appear in the Get Key section.</p><button class="primary compact" data-go="getkey">⌑ &nbsp; VIEW KEY</button></div></article></div><article class="panel padded activity"><div class="eyebrow">● &nbsp; ACCOUNT HISTORY</div><h3>Recent activity</h3><div class="empty-state">◷ &nbsp; No activity to display yet</div></article></section>
+<section class="page" id="getkey"><div class="page-heading"><div class="eyebrow">● &nbsp; ACCESS MANAGEMENT</div><h2>Get your key</h2><p>One active key per account. Every key expires exactly 24 hours after generation.</p></div><div class="two-col key-layout"><article class="panel padded"><div class="panel-head key-title"><span class="tile red">⌑</span><div><small>LICENSE REQUEST / PX-KEY</small><h3>Key generator</h3></div><span class="tag">24 HOURS</span></div><div class="key-empty" id="keyResult"><div class="key-orbit">⌑</div><h2>Your key starts here<span>.</span></h2><p>Sign in to check your active key or start a new GPLinks verification.</p><button class="primary" id="startKeyBtn">⌑ &nbsp; GET KEY <b>→</b></button><small>One key per account every 24 hours</small></div><div class="key-status" id="keyStatus" role="status"></div></article><article class="panel padded"><div class="eyebrow">● &nbsp; HOW IT WORKS</div><h3>Simple. Secure. Fast.</h3><div class="steps"><div><b>01</b><section><strong>Sign in</strong><p>Your key is linked to your PHANTOM X account.</p></section></div><div><b>02</b><section><strong>Complete GPLinks</strong><p>Finish the supported link verification.</p></section></div><div><b>03</b><section><strong>Receive your key</strong><p>Your key becomes active for exactly 24 hours.</p></section></div></div><div class="security-note">⬡ &nbsp; GPLinks link creation runs on the server. Key issuance requires an approved completion-verification method.</div></article></div><article class="panel padded reset-panel"><div class="eyebrow">● &nbsp; DEVICE MANAGEMENT</div><h3>Reset device binding</h3><p>Enter your own active key to clear its saved device binding. You must be signed in to the account that owns the key.</p><div class="reset-row"><input id="resetKeyInput" type="text" autocomplete="off" placeholder="Enter your active PHANTOM X key"><button class="secondary" id="resetDeviceBtn">RESET DEVICE</button></div><small>Resetting the device does not extend the key's 24-hour expiry.</small></article><div class="notice-strip">ⓘ &nbsp; <span><b>Need help?</b> Visit the support page for guidance and common questions.</span><button data-go="support">LEARN MORE →</button></div></section>
+<section class="page" id="support"><div class="page-heading"><div class="eyebrow">● &nbsp; HELP CENTER</div><h2>Support & FAQ</h2><p>Find answers and get help with your PHANTOM X dashboard.</p></div><div class="welcome panel"><span class="big-avatar">◎</span><div><small>PHANTOM X HELP CENTER</small><h3>How can we help you?</h3><p>Browse common questions or reach out to the community.</p></div><a class="primary link-primary" href="https://t.me/Ph4ntomXOfficial" target="_blank" rel="noreferrer">◎ &nbsp; CONTACT SUPPORT</a></div><div class="two-col"><article class="panel padded faq"><div class="eyebrow">● &nbsp; QUICK ANSWERS</div><h3>Frequently asked questions</h3><div class="faq-item open"><button>How do I get a PHANTOM X key?<b>＋</b></button><p>Open the Get Key page. The key request and verification backend will be enabled in a later development phase.</p></div><div class="faq-item"><button>Why is my dashboard showing Guest User?<b>＋</b></button><p>Sign in with Google or your email and password. Email verification must be disabled in Supabase for instant email/password access.</p></div><div class="faq-item"><button>Where can I get updates?<b>＋</b></button><p>Join the official PHANTOM X Telegram community for announcements and support.</p></div><div class="faq-item"><button>Is my license active?<b>＋</b></button><p>License status will be displayed here after the database and license verification services are integrated.</p></div></article><article class="panel padded"><span class="tile">◎</span><div class="eyebrow">COMMUNITY SUPPORT</div><h3>Talk to the team</h3><p>Connect with the PHANTOM X community for announcements, help and updates.</p><a class="text-btn" href="https://t.me/Ph4ntomXOfficial" target="_blank" rel="noreferrer">OPEN TELEGRAM ↗</a><div class="note">♧ &nbsp; OFFICIAL COMMUNITY</div></article></div></section>
+<footer>© 2026 PHANTOM X TEAM. ALL RIGHTS RESERVED. <span>BUILT FOR PERFORMANCE <b>●</b></span></footer></div></main>
+<div class="modal-backdrop" id="modal"><div class="modal"><button class="modal-x" id="modalX">×</button><div class="modal-symbol" id="modalSymbol">⌑</div><div class="eyebrow" id="modalLabel">UI PREVIEW</div><h3 id="modalTitle">Coming soon</h3><p id="modalText">This feature will be connected in the backend development phase.</p><button class="primary full" id="modalOkay">GOT IT &nbsp; ✓</button></div></div><script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="script.js"></script></body></html>
